@@ -15,6 +15,16 @@ drop_list = ['churn', 'customer_id']
 X = df.drop([c for c in drop_list if c in df.columns], axis=1)
 y = df['churn']
 
+# Feature engineering simple
+if 'tenure_months' in X.columns:
+    tenure_safe = X['tenure_months'].replace(0, pd.NA)
+    if {'support_tickets', 'tenure_months'}.issubset(X.columns):
+        X['tickets_per_tenure'] = (X['support_tickets'] / tenure_safe).fillna(0)
+    if {'total_revenue', 'tenure_months'}.issubset(X.columns):
+        X['revenue_per_month'] = (X['total_revenue'] / tenure_safe).fillna(0)
+    if {'payment_failures', 'tenure_months'}.issubset(X.columns):
+        X['payment_failure_rate'] = (X['payment_failures'] / tenure_safe).fillna(0)
+
 # 4. Train / Test Split (Avec Stratification pour préserver le déséquilibre)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
