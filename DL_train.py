@@ -1,6 +1,6 @@
 import joblib
 from imblearn.pipeline import Pipeline
-from imblearn.over_sampling import SMOTE
+from imblearn.combine import SMOTETomek
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.neural_network import MLPClassifier
@@ -15,14 +15,14 @@ num_cols, cat_cols = data['num_cols'], data['cat_cols']
 # 2. Preprocessor AVEC mise à l'échelle (indispensable pour les réseaux de neurones)
 pre_scaled = ColumnTransformer([
     ('num', StandardScaler(), num_cols),
-    ('cat', OneHotEncoder(handle_unknown='ignore'), cat_cols)
+    ('cat', OneHotEncoder(drop='first', handle_unknown='ignore'), cat_cols)
 ])
 
-# 3. Modèle et Rééchantillonnage (SMOTE)
+# 3. Pipeline obligatoire: preprocessor -> SMOTETomek -> modele
 model = MLPClassifier(hidden_layer_sizes=(32,16), max_iter=500, random_state=42)
 p = Pipeline([
     ('pre', pre_scaled),
-    ('smote', SMOTE(random_state=42)),
+    ('balance', SMOTETomek(random_state=42)),
     ('model', model)
 ])
 p.fit(X_train, y_train)

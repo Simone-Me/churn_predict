@@ -5,14 +5,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+    roc_curve,
+)
 
 st.set_page_config(page_title="Dashboard Churn EFREI", layout="wide")
 st.title("Dashboard Churn Client")
-
-st.markdown(
-    "Ce dashboard est concu pour une lecture metier. "
-    "On privilegie la coherence (Recall, PR-AUC) plutot qu'un score parfait."
-)
+st.markdown("Version metier: prediction scenario + comparaison avancee des modeles.")
 
 
 def find_project_root() -> Path:
@@ -22,7 +26,7 @@ def find_project_root() -> Path:
             return candidate
         if (candidate / "customer_churn_business_dataset.csv").exists():
             return candidate
-    raise FileNotFoundError("Impossible de localiser le fichier data")
+    raise FileNotFoundError("Impossible de localiser les fichiers projet.")
 
 
 @st.cache_data
@@ -30,60 +34,49 @@ def load_dataset() -> pd.DataFrame:
     root = find_project_root()
     primary = root / "data" / "customer_churn.csv"
     fallback = root / "customer_churn_business_dataset.csv"
-    data_path = primary if primary.exists() else fallback
-    df = pd.read_csv(data_path)
+    path = primary if primary.exists() else fallback
+    df = pd.read_csv(path)
     if "customer_id" in df.columns:
         df = df.drop(columns=["customer_id"])
     return df
 
 
-MODEL_FILENAME = "best_model.pkl"
-FINAL_MODEL_LABEL = f"Modele final ({MODEL_FILENAME})"
+@st.cache_data
+def load_info(df_raw: pd.DataFrame) -> dict:
+    root = find_project_root()
+    info_path = root / "data_preprocessed.pkl"
+    if info_path.exists():
+        return joblib.load(info_path)
+
+    # Fallback minimal si le fichier preprocess n'a pas encore ete genere.
+    X = df_raw.drop(columns=["churn"]) if "churn" in df_raw.columns else df_raw.copy()
+    y = df_raw["churn"] if "churn" in df_raw.columns else pd.Series(dtype=float)
+    return {
+        "X_train": X.copy(),
+        "X_test": X.copy(),
+        "y_train": y.copy(),
+        "y_test": y.copy(),
+        "num_cols": X.select_dtypes(exclude=["object"]).columns.tolist(),
+        "cat_cols": X.select_dtypes(include=["object"]).columns.tolist(),
+        "all_cols": X.columns.tolist(),
+        "medians": X.median(numeric_only=True).to_dict(),
+    }
 
 
 @st.cache_resource
-def load_best_model():
+def load_models() -> dict:
     root = find_project_root()
-    model_path = root / "models" / MODEL_FILENAME
-    if not model_path.exists():
-        return None, f"Modele introuvable: {model_path}"
-    try:
-        model = joblib.load(model_path)
-        return model, None
-    except Exception as exc:
-        return None, f"Erreur chargement modele: {exc}"
-
-
-def get_model_label(model) -> str:
-    if hasattr(model, "named_steps") and "model" in model.named_steps:
-        return model.named_steps["model"].__class__.__name__
-    return model.__class__.__name__
-
-
-def apply_feature_engineering(data: pd.DataFrame) -> pd.DataFrame:
-    temp = data.copy()
-    if "tenure_months" in temp.columns:
-        tenure_safe = temp["tenure_months"].replace(0, np.nan)
-    else:
-        tenure_safe = None
-
-    if {"support_tickets", "tenure_months"}.issubset(temp.columns):
-        temp["tickets_per_tenure"] = (temp["support_tickets"] / tenure_safe).fillna(0)
-    if {"total_revenue", "tenure_months"}.issubset(temp.columns):
-        temp["revenue_per_month"] = (temp["total_revenue"] / tenure_safe).fillna(0)
-    if {"payment_failures", "tenure_months"}.issubset(temp.columns):
-        temp["payment_failure_rate"] = (temp["payment_failures"] / tenure_safe).fillna(0)
-    return temp
-
-
-def build_defaults(df: pd.DataFrame) -> dict:
-    defaults = {}
-    for col in df.columns:
-        if df[col].dtype.kind in "iufc":
-            defaults[col] = float(df[col].median())
-        else:
-            defaults[col] = df[col].mode().iloc[0]
-    return defaults
+    files = {
+        "Logistic Regression": root / "model_LogisticRegression.pkl",
+        "MLP": root / "model_DeepLearning.pkl",
+        "XGBoost": root / "model_XGBoost.pkl",
+        "Random Forest": root / "model_RandomForest.pkl",
+    }
+    loaded = {}
+    for name, path in files.items():
+        if path.exists():
+            loaded[name] = joblib.load(path)
+    return loaded
 
 
 def predict_proba_safe(model, X: pd.DataFrame) -> np.ndarray:
@@ -92,270 +85,242 @@ def predict_proba_safe(model, X: pd.DataFrame) -> np.ndarray:
     if hasattr(model, "decision_function"):
         scores = model.decision_function(X)
         return 1 / (1 + np.exp(-scores))
-    raise ValueError("Le modele ne supporte pas predict_proba ni decision_function")
+    raise ValueError("Modele incompatible: ni predict_proba ni decision_function.")
+
+
+def build_modes(df: pd.DataFrame) -> dict:
+    modes = {}
+    for col in df.columns:
+        if df[col].dropna().empty:
+            modes[col] = "None"
+        else:
+            modes[col] = df[col].mode(dropna=True).iloc[0]
+    return modes
+
+
+def apply_feature_engineering(frame: pd.DataFrame) -> pd.DataFrame:
+    data = frame.copy()
+    tenure_col = "tenure_months" if "tenure_months" in data.columns else "tenure"
+    if tenure_col in data.columns:
+        tenure_safe = data[tenure_col].replace(0, np.nan)
+        if {"support_tickets", tenure_col}.issubset(data.columns):
+            data["tickets_per_tenure"] = (data["support_tickets"] / tenure_safe).fillna(0)
+        if {"total_revenue", tenure_col}.issubset(data.columns):
+            data["revenue_per_month"] = (data["total_revenue"] / tenure_safe).fillna(0)
+        if {"payment_failures", tenure_col}.issubset(data.columns):
+            data["payment_failure_rate"] = (data["payment_failures"] / tenure_safe).fillna(0)
+    return data
+
+
+def build_input_row(info: dict, medians: dict, modes: dict) -> dict:
+    row = {}
+    for col in info["all_cols"]:
+        if col in info["num_cols"]:
+            row[col] = float(medians.get(col, 0.0))
+        else:
+            row[col] = modes.get(col, "None")
+    return row
+
+
+def top_feature_importance(model, reference_x: pd.DataFrame) -> pd.Series | None:
+    if not hasattr(model, "named_steps") or "pre" not in model.named_steps:
+        return None
+    pre = model.named_steps["pre"]
+    inner = model.named_steps["model"]
+    feature_names = pre.get_feature_names_out()
+
+    if hasattr(inner, "feature_importances_"):
+        vals = pd.Series(inner.feature_importances_, index=feature_names)
+        return vals.sort_values(ascending=False).head(15)
+
+    if hasattr(inner, "coef_"):
+        coef = np.abs(inner.coef_).ravel()
+        vals = pd.Series(coef, index=feature_names)
+        return vals.sort_values(ascending=False).head(15)
+
+    return None
 
 
 df_raw = load_dataset()
-df_engineered = apply_feature_engineering(df_raw)
-raw_defaults = build_defaults(df_raw.drop(columns=["churn"]))
+info = load_info(df_raw)
+models = load_models()
+if not models:
+    st.error("Aucun modele charge. Lance d'abord les scripts d'entrainement.")
+    st.stop()
 
-best_model, best_model_error = load_best_model()
-best_model_available = best_model_error is None
+modes = build_modes(df_raw.drop(columns=["churn"], errors="ignore"))
+seuil = st.sidebar.slider("Seuil de decision", 0.1, 0.9, 0.35, 0.05)
+selected_model_name = st.sidebar.selectbox("Modele actif", sorted(models.keys()))
+model = models[selected_model_name]
 
-st.sidebar.markdown("## Reglages")
-threshold = st.sidebar.slider(
-    "Seuil decision (priorite Recall)", min_value=0.1, max_value=0.9, value=0.35, step=0.05
-)
-st.sidebar.caption(
-    "Choix metier: un seuil bas detecte plus de churners, au prix de plus de faux positifs."
-)
+tab1, tab2 = st.tabs(["Prediction Scenario", "Comparaison & Analyse"])
 
-tabs = st.tabs(
-    [
-        "1. Vue d'ensemble",
-        "2. Exploration et analyse",
-        "3. Prediction en temps reel",
-        "4. Simulation de scenarios",
-    ]
-)
-
-with tabs[0]:
-    st.header("Vue d'ensemble")
-    st.markdown(
-        "On affiche des KPIs clairs pour un public non technique. "
-        "Le focus reste sur le risque et l'impact revenu."
-    )
-
-    churn_rate = float(df_raw["churn"].mean())
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Taux de churn observe", f"{churn_rate:.1%}")
-
-    if best_model_available:
-        model_label = get_model_label(best_model)
-        st.info(f"Modele actif: {FINAL_MODEL_LABEL} - {model_label}.")
-        st.caption(
-            "Choix metier: on privilegie la detection des churners (Recall) et la PR-AUC "
-            "pour les classes desequilibrees."
+with tab1:
+    st.header(f"Scenario avec {selected_model_name}")
+    col1, col2 = st.columns(2)
+    with col1:
+        age = st.number_input("Age", 18, 100, 35)
+        tenure = st.number_input("Anciennete (mois)", 0, 120, 12)
+        contract = st.selectbox(
+            "Contrat",
+            ["Monthly", "Yearly", "Two-Year"],
         )
-
-        X_all = df_engineered.drop(columns=["churn"])
-        proba_all = predict_proba_safe(best_model, X_all)
-        at_risk_mask = proba_all >= threshold
-        at_risk_count = int(at_risk_mask.sum())
-
-        revenue_col = (
-            "total_revenue" if "total_revenue" in df_engineered.columns else "monthly_fee"
+    with col2:
+        fee = st.number_input("Frais mensuels (EUR)", 0, 1000, 50)
+        complaint = st.selectbox(
+            "Plainte",
+            ["Aucune Plainte", "Service", "Billing", "Technical"],
         )
-        revenue_at_risk = float(df_engineered.loc[at_risk_mask, revenue_col].sum())
+        segment = st.selectbox("Segment", ["Individual", "SME", "Enterprise"])
 
-        col2.metric("Clients a risque", f"{at_risk_count:,}")
-        col3.metric("Revenu a risque (estime)", f"{revenue_at_risk:,.0f}")
-        st.caption("Les KPIs s'appuient sur le modele final, pas seulement sur l'accuracy.")
-    else:
-        col2.metric("Clients a risque", "-")
-        col3.metric("Revenu a risque (estime)", "-")
-        st.warning(best_model_error)
+    if st.button("Predire le risque"):
+        medians = info.get("medians", {})
+        data = build_input_row(info, medians, modes)
 
-with tabs[1]:
-    st.header("Exploration des donnees")
-    st.markdown(
-        "Filtres simples pour comprendre les segments a risque. "
-        "Objectif: trouver des actions metier concretes."
-    )
+        if "age" in data:
+            data["age"] = float(age)
+        if "tenure_months" in data:
+            data["tenure_months"] = float(tenure)
+        if "tenure" in data:
+            data["tenure"] = float(tenure)
+        if "monthly_fee" in data:
+            data["monthly_fee"] = float(fee)
+        if "monthly_charges" in data:
+            data["monthly_charges"] = float(fee)
+        if "contract_type" in data:
+            data["contract_type"] = contract
+        if "complaint_type" in data:
+            data["complaint_type"] = complaint
+        if "customer_segment" in data:
+            data["customer_segment"] = segment
 
-    segment_options = sorted(df_raw["customer_segment"].dropna().unique())
-    contract_options = sorted(df_raw["contract_type"].dropna().unique())
+        df_test = pd.DataFrame([data])
+        df_test = apply_feature_engineering(df_test)
+        for col in info["all_cols"]:
+            if col not in df_test.columns:
+                df_test[col] = data.get(col, 0.0)
+        df_test = df_test[info["all_cols"]]
 
-    selected_segments = st.multiselect(
-        "Segment client", segment_options, default=segment_options
-    )
-    selected_contracts = st.multiselect(
-        "Type de contrat", contract_options, default=contract_options
-    )
+        prob = float(predict_proba_safe(model, df_test)[0])
+        st.session_state["last_prob"] = prob
 
-    filtered = df_raw[
-        df_raw["customer_segment"].isin(selected_segments)
-        & df_raw["contract_type"].isin(selected_contracts)
-    ]
+        st.subheader("Resultat")
+        if prob >= seuil:
+            st.error(f"Risque eleve de depart ({prob:.1%}) - au dessus du seuil {seuil:.1%}")
+        else:
+            st.success(f"Client probablement fidele ({prob:.1%}) - sous le seuil {seuil:.1%}")
 
-    st.write(f"Lignes selectionnees: {len(filtered):,}")
+        # Comparaison au reste des clients
+        X_test = info["X_test"]
+        peer_probs = predict_proba_safe(model, X_test)
+        percentile = float((peer_probs < prob).mean() * 100)
+        st.info(f"Comparaison: ce client est plus risque que {percentile:.1f}% des clients test.")
 
-    churn_by_contract = (
-        filtered.groupby("contract_type")["churn"].mean().sort_values(ascending=False)
-    )
-    st.subheader("Taux de churn par contrat")
-    st.bar_chart(churn_by_contract)
+with tab2:
+    st.header("Analyse comparative")
+    X_test = info["X_test"]
+    y_test = info["y_test"]
 
-    st.subheader("Distribution tenure (mois)")
-    fig, ax = plt.subplots()
-    ax.hist(filtered["tenure_months"], bins=20, color="#4C78A8")
-    ax.set_xlabel("Tenure (mois)")
-    ax.set_ylabel("Nb clients")
-    st.pyplot(fig)
+    st.subheader("1. Performances des modeles sur le jeu de test")
+    st.caption("Ce tableau montre le compromis precision/recall/f1/ROC-AUC pour comparer les modeles.")
 
-    if "nps_score" in filtered.columns:
-        st.subheader("NPS par statut churn")
-        fig_nps, ax_nps = plt.subplots()
-        filtered.boxplot(column="nps_score", by="churn", ax=ax_nps)
-        ax_nps.set_title("")
-        ax_nps.set_xlabel("Churn")
-        ax_nps.set_ylabel("NPS")
-        st.pyplot(fig_nps)
+    metrics_data = []
+    roc_curves = {}
+    for nom, m in models.items():
+        y_pred_proba = predict_proba_safe(m, X_test)
+        y_pred = (y_pred_proba >= seuil).astype(int)
 
-    if best_model_available:
-        st.subheader("Distribution du risque predit")
-        risk_scores = predict_proba_safe(best_model, df_engineered.drop(columns=["churn"]))
-        fig_risk, ax_risk = plt.subplots()
-        ax_risk.hist(risk_scores, bins=20, color="#F28E2B")
-        ax_risk.set_xlabel("Probabilite de churn")
-        ax_risk.set_ylabel("Nb clients")
-        st.pyplot(fig_risk)
+        acc = accuracy_score(y_test, y_pred)
+        prec = precision_score(y_test, y_pred, zero_division=0)
+        rec = recall_score(y_test, y_pred, zero_division=0)
+        f1 = f1_score(y_test, y_pred, zero_division=0)
+        roc_auc = roc_auc_score(y_test, y_pred_proba)
 
-        st.subheader("Risque moyen par segment")
-        risk_df = df_raw.copy()
-        risk_df["risk_score"] = risk_scores
-        risk_by_segment = (
-            risk_df.groupby("customer_segment")["risk_score"]
-            .mean()
-            .sort_values(ascending=False)
-        )
-        st.bar_chart(risk_by_segment)
-    else:
-        st.info("Le modele final est requis pour afficher les scores de risque.")
-
-with tabs[2]:
-    st.header("Prediction en temps reel")
-    st.markdown(
-        "Formulaire simple. Les champs non remplis sont completes par des valeurs "
-        "par defaut (medianes et modes)."
-    )
-
-    if not best_model_available:
-        st.error(best_model_error)
-    else:
-        with st.form("predict_form"):
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                age = st.number_input("Age", 18, 100, int(raw_defaults.get("age", 35)))
-                tenure = st.number_input(
-                    "Tenure (mois)", 0, 120, int(raw_defaults.get("tenure_months", 12))
-                )
-                contract_type = st.selectbox(
-                    "Contract type",
-                    sorted(df_raw["contract_type"].dropna().unique()),
-                )
-            with col2:
-                monthly_fee = st.number_input(
-                    "Monthly fee", 0, 1000, int(raw_defaults.get("monthly_fee", 50))
-                )
-                payment_failures = st.number_input(
-                    "Payment failures", 0, 20, int(raw_defaults.get("payment_failures", 0))
-                )
-                nps_score = st.number_input(
-                    "NPS score", -100, 100, int(raw_defaults.get("nps_score", 0))
-                )
-            with col3:
-                support_tickets = st.number_input(
-                    "Support tickets", 0, 50, int(raw_defaults.get("support_tickets", 0))
-                )
-                customer_segment = st.selectbox(
-                    "Segment",
-                    sorted(df_raw["customer_segment"].dropna().unique()),
-                )
-                complaint_type = st.selectbox(
-                    "Complaint type",
-                    sorted(df_raw["complaint_type"].dropna().unique()),
-                )
-
-            submitted = st.form_submit_button("Predire le risque")
-
-        if submitted:
-            row = raw_defaults.copy()
-            row.update(
-                {
-                    "age": float(age),
-                    "tenure_months": float(tenure),
-                    "contract_type": contract_type,
-                    "monthly_fee": float(monthly_fee),
-                    "payment_failures": float(payment_failures),
-                    "nps_score": float(nps_score),
-                    "support_tickets": float(support_tickets),
-                    "customer_segment": customer_segment,
-                    "complaint_type": complaint_type,
-                }
-            )
-            X_input = apply_feature_engineering(pd.DataFrame([row]))
-            prob = float(predict_proba_safe(best_model, X_input)[0])
-
-            st.subheader("Resultat")
-            if prob >= threshold:
-                st.error(f"Risque eleve de churn: {prob:.1%}")
-            else:
-                st.success(f"Risque modere: {prob:.1%}")
-
-            st.markdown("**Explication locale (SHAP)**")
-            try:
-                import shap
-
-                if hasattr(best_model, "named_steps") and "pre" in best_model.named_steps:
-                    pre = best_model.named_steps["pre"]
-                    inner = best_model.named_steps["model"]
-                    X_bg = pre.transform(df_engineered.drop(columns=["churn"]).head(200))
-                    X_row = pre.transform(X_input)
-                    feature_names = pre.get_feature_names_out()
-
-                    explainer = shap.Explainer(inner, X_bg, feature_names=feature_names)
-                    shap_values = explainer(X_row)
-
-                    fig = plt.figure()
-                    shap.waterfall_plot(shap_values[0], show=False)
-                    st.pyplot(fig)
-                else:
-                    st.info("SHAP local non disponible: pipeline incomplet.")
-            except Exception as exc:
-                st.info(f"SHAP non disponible: {exc}")
-
-with tabs[3]:
-    st.header("Simulation de scenarios")
-    st.markdown(
-        "On modifie quelques leviers metier (engagement, NPS, tickets) pour voir l'impact "
-        "sur la proba de churn."
-    )
-    if not best_model_available:
-        st.error(best_model_error)
-    else:
-        base_row = raw_defaults.copy()
-        baseline_df = apply_feature_engineering(pd.DataFrame([base_row]))
-        baseline_prob = float(predict_proba_safe(best_model, baseline_df)[0])
-
-        col1, col2 = st.columns(2)
-        with col1:
-            sim_tenure = st.slider(
-                "Tenure (mois)", 0, 120, int(base_row.get("tenure_months", 12))
-            )
-            sim_nps = st.slider("NPS score", -100, 100, int(base_row.get("nps_score", 0)))
-            sim_failures = st.slider(
-                "Payment failures", 0, 20, int(base_row.get("payment_failures", 0))
-            )
-        with col2:
-            sim_tickets = st.slider(
-                "Support tickets", 0, 50, int(base_row.get("support_tickets", 0))
-            )
-            sim_fee = st.slider("Monthly fee", 0, 1000, int(base_row.get("monthly_fee", 50)))
-
-        sim_row = base_row.copy()
-        sim_row.update(
+        metrics_data.append(
             {
-                "tenure_months": float(sim_tenure),
-                "nps_score": float(sim_nps),
-                "payment_failures": float(sim_failures),
-                "support_tickets": float(sim_tickets),
-                "monthly_fee": float(sim_fee),
+                "Modele": nom,
+                "Accuracy": f"{acc:.2f}",
+                "Precision": f"{prec:.2f}",
+                "Recall": f"{rec:.2f}",
+                "F1-Score": f"{f1:.2f}",
+                "ROC-AUC": f"{roc_auc:.2f}",
             }
         )
-        sim_df = apply_feature_engineering(pd.DataFrame([sim_row]))
-        sim_prob = float(predict_proba_safe(best_model, sim_df)[0])
+        fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
+        roc_curves[nom] = (fpr, tpr, roc_auc)
 
-        st.metric("Baseline", f"{baseline_prob:.1%}")
-        st.metric("Scenario", f"{sim_prob:.1%}", delta=f"{(sim_prob - baseline_prob):.1%}")
-        st.caption("Plus le delta est positif, plus le risque augmente.")
+    st.table(pd.DataFrame(metrics_data))
+
+    st.subheader("2. Comparaison des courbes ROC")
+    st.caption("La courbe ROC visualise la capacite a separer churners et non churners.")
+    fig_roc, ax_roc = plt.subplots(figsize=(8, 6))
+    for nom, (fpr, tpr, roc_auc) in roc_curves.items():
+        ax_roc.plot(fpr, tpr, label=f"{nom} (AUC = {roc_auc:.2f})")
+    ax_roc.plot([0, 1], [0, 1], "k--", label="Aleatoire")
+    ax_roc.set_xlabel("Taux de faux positifs (FPR)")
+    ax_roc.set_ylabel("Taux de vrais positifs (TPR)")
+    ax_roc.set_title("Courbes ROC")
+    ax_roc.legend(loc="lower right")
+    st.pyplot(fig_roc)
+
+    st.subheader(f"3. Importance des variables ({selected_model_name})")
+    st.caption("Ce graphe indique les variables qui influencent le plus la decision du modele selectionne.")
+    imp = top_feature_importance(model, X_test)
+    if imp is None:
+        st.info("Importance indisponible pour ce modele.")
+    else:
+        fig_imp, ax_imp = plt.subplots(figsize=(8, 6))
+        imp.sort_values(ascending=True).plot(kind="barh", ax=ax_imp, color="#4C78A8")
+        ax_imp.set_xlabel("Importance")
+        ax_imp.set_ylabel("Variables")
+        st.pyplot(fig_imp)
+
+    st.subheader("4. Segmentation avancee: churn par segment et contrat")
+    st.caption(
+        "Ce heatmap montre les zones de risque par combinaison segment x contrat, utile pour cibler les campagnes."
+    )
+    if {"customer_segment", "contract_type", "churn"}.issubset(df_raw.columns):
+        heat = (
+            df_raw.groupby(["customer_segment", "contract_type"])["churn"]
+            .mean()
+            .unstack(fill_value=0)
+        )
+        st.dataframe(heat.style.format("{:.1%}"))
+    else:
+        st.info("Colonnes segment/contrat manquantes pour ce graphe.")
+
+    st.subheader("5. Cohortes d'anciennete")
+    st.caption("Ce graphe compare le churn selon l'anciennete, pour identifier les phases critiques du cycle client.")
+    tenure_col = "tenure_months" if "tenure_months" in df_raw.columns else "tenure"
+    if tenure_col in df_raw.columns:
+        cohort = df_raw.copy()
+        cohort["tenure_bin"] = pd.cut(
+            cohort[tenure_col], bins=[-1, 3, 6, 12, 24, 60, 200], include_lowest=True
+        )
+        churn_by_bin = cohort.groupby("tenure_bin")["churn"].mean()
+        fig_bin, ax_bin = plt.subplots(figsize=(8, 4))
+        churn_by_bin.plot(kind="bar", ax=ax_bin, color="#F28E2B")
+        ax_bin.set_ylabel("Taux de churn")
+        ax_bin.set_xlabel("Cohorte anciennete")
+        st.pyplot(fig_bin)
+    else:
+        st.info("Colonne d'anciennete absente.")
+
+    st.subheader("6. Impact des plaintes")
+    st.caption("Ce graphe montre quels types de plaintes sont les plus associes au churn.")
+    if {"complaint_type", "churn"}.issubset(df_raw.columns):
+        complaint_churn = df_raw.groupby("complaint_type")["churn"].mean().sort_values(ascending=False)
+        st.bar_chart(complaint_churn)
+    else:
+        st.info("Colonne complaint_type absente.")
+
+    st.subheader("7. Comparaison avec autres clients (percentiles de risque)")
+    st.caption("La distribution des probabilites situe le client saisi par rapport a la population test.")
+    peer_probs = predict_proba_safe(model, X_test)
+    fig_hist, ax_hist = plt.subplots(figsize=(8, 4))
+    ax_hist.hist(peer_probs, bins=30, color="#59A14F")
+    if "last_prob" in st.session_state:
+        ax_hist.axvline(st.session_state["last_prob"], color="red", linestyle="--", linewidth=2)
+    ax_hist.set_xlabel("Probabilite de churn")
+    ax_hist.set_ylabel("Nombre de clients")
+    st.pyplot(fig_hist)
