@@ -18,6 +18,11 @@ from sklearn.metrics import (
 
 from feature_engineering import prepare_customer_features
 
+try:
+    import shap
+except ImportError:
+    shap = None
+
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_PATH = BASE_DIR / "data" / "customer_churn.csv"
@@ -67,6 +72,17 @@ def build_default_customer(info, raw_data):
 def format_feature_name(name):
     """Rend les noms de variables plus lisibles dans les graphiques."""
     return name.replace("num__", "").replace("cat__", "").replace("_", " ").title()
+
+
+def get_transformed_feature_names(model, X_sample):
+    """Recupere les noms apres preprocessing pour les importances natives et SHAP."""
+    preprocessor = model.named_steps.get("pre")
+    if preprocessor is None:
+        return X_sample.columns.tolist()
+    try:
+        return preprocessor.get_feature_names_out()
+    except AttributeError:
+        return X_sample.columns.tolist()
 
 
 def model_metrics(model, X_test, y_test, threshold):
@@ -252,6 +268,53 @@ def plot_radar(comparison):
     return fig
 
 
+def plot_native_feature_importance(model, X_sample, top_n=15):
+    """Importance native apres entrainement, disponible pour les modeles d'arbres."""
+    estimator = model.named_steps.get("model")
+    if estimator is None or not hasattr(estimator, "feature_importances_"):
+        return None
+
+    names = get_transformed_feature_names(model, X_sample)
+    importances = pd.Series(estimator.feature_importances_, index=names)
+    top = importances.sort_values(ascending=False).head(top_n).sort_values()
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    top.rename(index=format_feature_name).plot(kind="barh", ax=ax, color="#0f766e")
+    ax.set_title("Feature importances natives du modele final")
+    ax.set_xlabel("Importance")
+    fig.tight_layout()
+    return fig
+
+
+def plot_shap_importance(model, X_sample, top_n=15):
+    """SHAP sur le modele final selectionne, pour une explication plus avancee."""
+    if shap is None:
+        return None
+
+    estimator = model.named_steps.get("model")
+    preprocessor = model.named_steps.get("pre")
+    if estimator is None or preprocessor is None:
+        return None
+
+    transformed = preprocessor.transform(X_sample)
+    names = get_transformed_feature_names(model, X_sample)
+
+    explainer = shap.TreeExplainer(estimator)
+    shap_values = explainer.shap_values(transformed)
+    if isinstance(shap_values, list):
+        shap_values = shap_values[-1]
+
+    mean_abs = np.abs(shap_values).mean(axis=0)
+    top = pd.Series(mean_abs, index=names).sort_values(ascending=False).head(top_n).sort_values()
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    top.rename(index=format_feature_name).plot(kind="barh", ax=ax, color="#7c3aed")
+    ax.set_title("SHAP moyen absolu du modele final")
+    ax.set_xlabel("Impact moyen sur la prediction")
+    fig.tight_layout()
+    return fig
+
+
 model, info, raw_data, comparison, thresholds, baseline = load_artifacts()
 
 st.title("Pilotage du risque de churn client")
@@ -421,8 +484,26 @@ with tab_explain:
         "Cette partie sert a expliquer les variables qui aident le plus le modele a detecter le churn."
     )
 
-    # Permutation importance : on melange une variable et on observe la perte de recall.
     sample_size = min(500, len(X_test))
+
+    st.markdown("#### 1. Feature importances natives")
+    st.write(
+        "Cette analyse vient directement du modele apres entrainement. Elle est rapide et utile "
+        "pour les modeles d'arbres, mais elle reste moins fiable que la permutation importance."
+    )
+    native_fig = plot_native_feature_importance(model, X_test.iloc[:sample_size])
+    if native_fig is not None:
+        st.pyplot(native_fig)
+        plt.close(native_fig)
+    else:
+        st.info("Le modele final ne fournit pas `feature_importances_`.")
+
+    st.markdown("#### 2. Permutation importance")
+    st.write(
+        "On melange une variable et on mesure la perte de recall. Si le score baisse fortement, "
+        "la variable est importante pour detecter les churners."
+    )
+    # Permutation importance : on melange une variable et on observe la perte de recall.
     result = permutation_importance(
         model,
         X_test.iloc[:sample_size],
@@ -442,6 +523,18 @@ with tab_explain:
     ax.set_title("Variables les plus utiles pour le recall")
     st.pyplot(fig)
     plt.close(fig)
+
+    st.markdown("#### 3. SHAP")
+    st.write(
+        "SHAP explique le modele final de facon plus avancee. Le graphique montre les variables "
+        "qui ont le plus grand impact moyen sur les predictions."
+    )
+    shap_fig = plot_shap_importance(model, X_test.iloc[:sample_size])
+    if shap_fig is not None:
+        st.pyplot(shap_fig)
+        plt.close(shap_fig)
+    else:
+        st.info("SHAP n'est pas disponible pour cet environnement ou ce modele.")
 
     if comparison is not None:
         st.markdown("#### Rappel du choix du modele")

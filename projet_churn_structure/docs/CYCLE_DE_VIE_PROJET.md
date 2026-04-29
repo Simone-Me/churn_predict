@@ -85,6 +85,8 @@ Le notebook `04_entrainement_complet.ipynb` entraine les experiences et regenere
 - les modeles dans `models/` ;
 - `data_preprocessed.pkl`.
 
+Les modeles ont ete choisis pour representer plusieurs approches : Logistic Regression pour une baseline interpretable, Random Forest pour les relations non lineaires, XGBoost pour le boosting performant sur donnees tabulaires, et MLP pour tester une approche Deep Learning.
+
 Au seuil `0.5`, XGBoost avec `scale_pos_weight` donne un bon compromis :
 
 - recall : `0.696` ;
@@ -130,3 +132,5 @@ Le dashboard Streamlit transforme le modele en outil decisionnel :
 ## 11. Conclusion
 
 Le projet montre qu'un bon modele de churn ne se choisit pas seulement avec l'accuracy. Il faut adapter les metriques, traiter le desequilibre, utiliser une validation stratifiee et ajuster le seuil en fonction du besoin metier.
+
+Les limites principales sont la precision encore faible, le choix du seuil qui depend du cout reel d'une action CRM, et le besoin de surveiller les performances dans le temps. Pour aller plus loin, on pourrait calibrer les probabilites, optimiser les hyperparametres, ajouter une matrice de cout et expliquer les predictions individuelles avec SHAP.

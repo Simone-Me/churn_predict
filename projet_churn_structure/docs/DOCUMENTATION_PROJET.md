@@ -56,6 +56,15 @@ Ces variables representent des signaux CRM lisibles : activite, satisfaction, su
 
 Le notebook `04_entrainement_complet.ipynb` compare plusieurs approches.
 
+Les modeles ont ete choisis pour couvrir plusieurs familles :
+
+- Logistic Regression : modele simple, interpretable, utile comme reference ;
+- Random Forest : modele d'arbres capable de capturer des relations non lineaires ;
+- XGBoost : modele de boosting performant sur donnees tabulaires, avec `scale_pos_weight` adapte au desequilibre ;
+- MLP : reseau de neurones simple, ajoute pour tester une approche Deep Learning.
+
+Ce choix permet de comparer un modele lineaire, des arbres, du boosting et du Deep Learning.
+
 Approches data-level :
 
 - `RandomOverSampler` : duplique la classe minoritaire, mais peut favoriser l'overfitting ;
@@ -121,3 +130,20 @@ Commande :
 ```powershell
 streamlit run app.py
 ```
+
+## 10. Limites et pistes d'amelioration
+
+Limites :
+
+- la precision reste faible, donc certaines alertes concernent des clients qui ne churneront pas ;
+- le seuil optimal depend du cout reel d'une action de retention ;
+- les performances doivent etre surveillees si les comportements clients changent dans le temps ;
+- le dataset ne permet pas de mesurer directement le retour financier d'une campagne CRM.
+
+Ameliorations possibles :
+
+- optimiser davantage les hyperparametres ;
+- calibrer les probabilites ;
+- ajouter une matrice de cout metier pour choisir le seuil ;
+- suivre le drift des donnees ;
+- utiliser SHAP pour expliquer les predictions client par client.
