@@ -54,7 +54,7 @@ Ces variables representent des signaux CRM lisibles : activite, satisfaction, su
 
 ## 5. Strategies testees
 
-Le notebook `06_entrainement_complet.ipynb` compare plusieurs approches.
+Le notebook `04_entrainement_complet.ipynb` compare plusieurs approches.
 
 Approches data-level :
 

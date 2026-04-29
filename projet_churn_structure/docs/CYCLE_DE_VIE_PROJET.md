@@ -77,7 +77,7 @@ Les effets attendus sont differents : l'over-sampling peut overfitter, SMOTE peu
 
 ## 7. Entrainement et comparaison
 
-Le notebook `06_entrainement_complet.ipynb` entraine les experiences et regenere :
+Le notebook `04_entrainement_complet.ipynb` entraine les experiences et regenere :
 
 - `reports/baseline_analysis.csv` ;
 - `reports/model_comparison.csv` ;

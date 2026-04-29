@@ -2,6 +2,7 @@ from pathlib import Path
 
 import joblib
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import streamlit as st
 from sklearn.inspection import permutation_importance
@@ -23,6 +24,8 @@ DATA_PATH = BASE_DIR / "data" / "customer_churn.csv"
 PREPROCESSED_PATH = BASE_DIR / "data_preprocessed.pkl"
 MODEL_PATH = BASE_DIR / "models" / "best_model.pkl"
 REPORT_PATH = BASE_DIR / "reports" / "model_comparison.csv"
+THRESHOLD_REPORT_PATH = BASE_DIR / "reports" / "threshold_analysis.csv"
+BASELINE_REPORT_PATH = BASE_DIR / "reports" / "baseline_analysis.csv"
 DEFAULT_THRESHOLD = 0.50
 
 
@@ -31,18 +34,23 @@ st.set_page_config(page_title="Dashboard Churn Client", layout="wide")
 
 @st.cache_resource
 def load_artifacts():
+    """Charge les artefacts generes par le notebook 04 une seule fois."""
     model = joblib.load(MODEL_PATH) if MODEL_PATH.exists() else None
     info = joblib.load(PREPROCESSED_PATH) if PREPROCESSED_PATH.exists() else None
     raw_data = pd.read_csv(DATA_PATH) if DATA_PATH.exists() else None
     comparison = pd.read_csv(REPORT_PATH) if REPORT_PATH.exists() else None
-    return model, info, raw_data, comparison
+    thresholds = pd.read_csv(THRESHOLD_REPORT_PATH) if THRESHOLD_REPORT_PATH.exists() else None
+    baseline = pd.read_csv(BASELINE_REPORT_PATH) if BASELINE_REPORT_PATH.exists() else None
+    return model, info, raw_data, comparison, thresholds, baseline
 
 
 def predict_scores(model, X):
+    """Retourne la probabilite de churn, necessaire pour appliquer un seuil metier."""
     return model.predict_proba(X)[:, 1]
 
 
 def build_default_customer(info, raw_data):
+    """Construit un client moyen pour pre-remplir la simulation."""
     medians = info.get("medians", {})
     modes = info.get("modes", {})
     values = {}
@@ -57,10 +65,12 @@ def build_default_customer(info, raw_data):
 
 
 def format_feature_name(name):
+    """Rend les noms de variables plus lisibles dans les graphiques."""
     return name.replace("num__", "").replace("cat__", "").replace("_", " ").title()
 
 
 def model_metrics(model, X_test, y_test, threshold):
+    """Calcule les metriques au seuil choisi par l'utilisateur metier."""
     scores = predict_scores(model, X_test)
     y_pred = (scores >= threshold).astype(int)
     tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
@@ -78,29 +88,181 @@ def model_metrics(model, X_test, y_test, threshold):
     }
 
 
-model, info, raw_data, comparison = load_artifacts()
+def plot_baseline_metrics(baseline):
+    """Graphique du notebook 05 : l'accuracy seule peut cacher un recall nul."""
+    fig, ax = plt.subplots(figsize=(8, 4))
+    metrics = ["accuracy", "recall", "precision", "f1"]
+    x = np.arange(len(baseline["modele"]))
+    width = 0.18
+
+    for i, metric in enumerate(metrics):
+        ax.bar(x + (i - 1.5) * width, baseline[metric], width, label=metric)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(baseline["modele"], rotation=15, ha="right")
+    ax.set_ylim(0, 1)
+    ax.set_title("Baseline : accuracy elevee mais recall faible")
+    ax.set_ylabel("Score")
+    ax.legend(ncol=4, loc="upper center", bbox_to_anchor=(0.5, -0.18))
+    fig.tight_layout()
+    return fig
+
+
+def plot_model_bars(comparison):
+    """Graphique du notebook 05 : comparaison recall et PR-AUC par modele."""
+    plot_df = comparison.sort_values("test_recall", ascending=True)
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    axes[0].barh(plot_df["modele"], plot_df["test_recall"], color="#2563eb")
+    axes[0].set_title("Recall par modele au seuil 0.5")
+    axes[0].set_xlabel("Recall")
+    axes[0].set_xlim(0, 1)
+
+    axes[1].barh(plot_df["modele"], plot_df["test_pr_auc"], color="#16a34a")
+    axes[1].set_title("PR-AUC par modele")
+    axes[1].set_xlabel("PR-AUC")
+    axes[1].set_xlim(0, max(0.4, plot_df["test_pr_auc"].max() + 0.05))
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_metric_comparison(comparison):
+    """Graphique du notebook 05 : comparaison multi-metriques des meilleurs modeles."""
+    metric_cols = [
+        "test_accuracy",
+        "test_recall",
+        "test_precision",
+        "test_f1",
+        "test_roc_auc",
+        "test_pr_auc",
+    ]
+    metric_labels = ["Accuracy", "Recall", "Precision", "F1", "ROC-AUC", "PR-AUC"]
+    ordered = comparison.sort_values("test_recall", ascending=False).head(6)
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    x = np.arange(len(ordered))
+    width = 0.12
+
+    for i, col in enumerate(metric_cols):
+        ax.bar(x + (i - 2.5) * width, ordered[col], width, label=metric_labels[i])
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(ordered["modele"], rotation=30, ha="right")
+    ax.set_ylim(0, 1)
+    ax.set_title("Comparaison multi-metriques des meilleurs modeles en recall")
+    ax.set_ylabel("Score")
+    ax.legend(ncol=3, loc="upper center", bbox_to_anchor=(0.5, -0.28))
+    fig.tight_layout()
+    return fig
+
+
+def plot_error_bars(comparison):
+    """Graphique du notebook 05 : faux negatifs et faux positifs par modele."""
+    error_df = comparison.sort_values("test_fn", ascending=True)
+    fig, ax = plt.subplots(figsize=(12, 5))
+    x = np.arange(len(error_df))
+    width = 0.38
+
+    ax.bar(x - width / 2, error_df["test_fn"], width, label="Faux negatifs", color="#dc2626")
+    ax.bar(x + width / 2, error_df["test_fp"], width, label="Faux positifs", color="#f59e0b")
+    ax.set_xticks(x)
+    ax.set_xticklabels(error_df["modele"], rotation=30, ha="right")
+    ax.set_title("Erreurs par modele au seuil 0.5")
+    ax.set_ylabel("Nombre de clients")
+    ax.legend()
+    fig.tight_layout()
+    return fig
+
+
+def plot_threshold_curves(thresholds, final_model, recommended_threshold):
+    """Graphique du notebook 05 : impact du seuil sur scores, FP et FN."""
+    final_thresholds = thresholds[thresholds["modele"] == final_model].sort_values("threshold")
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    axes[0].plot(final_thresholds["threshold"], final_thresholds["recall"], marker="o", label="Recall")
+    axes[0].plot(
+        final_thresholds["threshold"],
+        final_thresholds["precision"],
+        marker="o",
+        label="Precision",
+    )
+    axes[0].plot(final_thresholds["threshold"], final_thresholds["f1"], marker="o", label="F1")
+    axes[0].axvline(recommended_threshold, color="black", linestyle="--", label="Seuil retenu")
+    axes[0].set_title("Precision / Recall / F1 selon le seuil")
+    axes[0].set_xlabel("Seuil")
+    axes[0].set_ylabel("Score")
+    axes[0].set_ylim(0, 1)
+    axes[0].legend()
+
+    axes[1].plot(
+        final_thresholds["threshold"],
+        final_thresholds["fp"],
+        marker="o",
+        label="Faux positifs",
+        color="#f59e0b",
+    )
+    axes[1].plot(
+        final_thresholds["threshold"],
+        final_thresholds["fn"],
+        marker="o",
+        label="Faux negatifs",
+        color="#dc2626",
+    )
+    axes[1].axvline(recommended_threshold, color="black", linestyle="--", label="Seuil retenu")
+    axes[1].set_title("Faux positifs / faux negatifs selon le seuil")
+    axes[1].set_xlabel("Seuil")
+    axes[1].set_ylabel("Nombre de clients")
+    axes[1].legend()
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_radar(comparison):
+    """Graphique etoile du notebook 05 pour comparer les meilleurs modeles."""
+    radar_metrics = [
+        "test_accuracy",
+        "test_recall",
+        "test_precision",
+        "test_f1",
+        "test_roc_auc",
+        "test_pr_auc",
+    ]
+    radar_labels = ["Accuracy", "Recall", "Precision", "F1", "ROC-AUC", "PR-AUC"]
+    radar_models = comparison.sort_values(
+        ["modele_final", "test_recall", "test_pr_auc"], ascending=False
+    ).head(4)
+    angles = np.linspace(0, 2 * np.pi, len(radar_metrics), endpoint=False).tolist()
+    angles += angles[:1]
+
+    fig, ax = plt.subplots(figsize=(7, 7), subplot_kw={"polar": True})
+    for _, row in radar_models.iterrows():
+        values = row[radar_metrics].astype(float).tolist()
+        values += values[:1]
+        ax.plot(angles, values, linewidth=2, label=row["modele"].replace("_", " "))
+        ax.fill(angles, values, alpha=0.08)
+
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(radar_labels)
+    ax.set_ylim(0, 1)
+    ax.set_title("Graphique etoile : comparaison multi-metriques")
+    ax.legend(loc="upper right", bbox_to_anchor=(1.45, 1.10))
+    fig.tight_layout()
+    return fig
+
+
+model, info, raw_data, comparison, thresholds, baseline = load_artifacts()
 
 st.title("Pilotage du risque de churn client")
 
 if model is None or info is None or raw_data is None:
-    st.error("Artefacts manquants. Lance d'abord le notebook `06_entrainement_complet.ipynb`.")
+    st.error("Artefacts manquants. Lance d'abord le notebook `04_entrainement_complet.ipynb`.")
     st.stop()
 
 recommended_threshold = float(info.get("threshold_recommande", DEFAULT_THRESHOLD))
 selected_model_name = info.get("modele_retenu", "modele retenu")
 selected_strategy = info.get("strategie_retenue", "strategie non renseignee")
-
-threshold = st.sidebar.slider(
-    "Seuil d'alerte churn",
-    min_value=0.10,
-    max_value=0.90,
-    value=recommended_threshold,
-    step=0.05,
-)
-st.sidebar.caption(
-    f"Modele retenu : {selected_model_name}. Strategie : {selected_strategy}. "
-    f"Seuil recommande : {recommended_threshold:.2f}."
-)
 
 X_test = info["X_test"]
 y_test = info["y_test"]
@@ -111,7 +273,21 @@ tab_business, tab_simulation, tab_explain = st.tabs(
 
 with tab_business:
     st.subheader("Indicateurs de retention")
+    st.caption(
+        f"Modele retenu : {selected_model_name}. Strategie : {selected_strategy}. "
+        f"Seuil recommande : {recommended_threshold:.2f}."
+    )
 
+    # Le seuil est un choix metier : plus il baisse, plus on alerte de clients.
+    threshold = st.slider(
+        "Seuil d'alerte churn",
+        min_value=0.10,
+        max_value=0.90,
+        value=recommended_threshold,
+        step=0.05,
+    )
+
+    # On score tous les clients pour prioriser les actions CRM.
     scored = raw_data.copy()
     features = prepare_customer_features(scored)[info["all_cols"]]
     scored["proba_churn"] = predict_scores(model, features)
@@ -123,6 +299,7 @@ with tab_business:
     total_risk_revenue = scored["revenu_a_risque"].sum()
     metrics = model_metrics(model, X_test, y_test, threshold)
 
+    # KPI de pilotage : portefeuille, churn observe, volume d'alertes et revenu a risque.
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     kpi1.metric("Clients", f"{len(scored):,}".replace(",", " "))
     kpi2.metric("Churn observe", f"{churn_rate:.1%}")
@@ -165,6 +342,7 @@ with tab_business:
 
     with right:
         st.markdown("#### Risque par segment")
+        # Vue agregee pour identifier les segments les plus exposes.
         segment_risk = (
             scored.groupby("customer_segment", as_index=False)
             .agg(
@@ -220,6 +398,7 @@ with tab_simulation:
     )
     values["customer_segment"] = st.selectbox("Segment", ["Individual", "SME", "Enterprise"])
 
+    # La simulation applique le meme feature engineering que l'entrainement.
     scenario = prepare_customer_features(pd.DataFrame([values]))[info["all_cols"]]
     probability = float(predict_scores(model, scenario)[0])
     expected_loss = float(values["monthly_fee"] * probability)
@@ -242,6 +421,7 @@ with tab_explain:
         "Cette partie sert a expliquer les variables qui aident le plus le modele a detecter le churn."
     )
 
+    # Permutation importance : on melange une variable et on observe la perte de recall.
     sample_size = min(500, len(X_test))
     result = permutation_importance(
         model,
@@ -261,6 +441,7 @@ with tab_explain:
     top.rename(index=format_feature_name).plot(kind="barh", ax=ax, color="#2563eb")
     ax.set_title("Variables les plus utiles pour le recall")
     st.pyplot(fig)
+    plt.close(fig)
 
     if comparison is not None:
         st.markdown("#### Rappel du choix du modele")
@@ -290,6 +471,37 @@ with tab_explain:
             ),
             use_container_width=True,
         )
+
+        st.markdown("#### Graphiques de choix du modele")
+        st.write(
+            "Ces graphiques reprennent l'analyse du notebook `05_modelisation_evaluation.ipynb`."
+        )
+
+        if baseline is not None:
+            fig = plot_baseline_metrics(baseline)
+            st.pyplot(fig)
+            plt.close(fig)
+
+        fig = plot_model_bars(comparison)
+        st.pyplot(fig)
+        plt.close(fig)
+
+        fig = plot_metric_comparison(comparison)
+        st.pyplot(fig)
+        plt.close(fig)
+
+        fig = plot_error_bars(comparison)
+        st.pyplot(fig)
+        plt.close(fig)
+
+        fig = plot_radar(comparison)
+        st.pyplot(fig)
+        plt.close(fig)
+
+        if thresholds is not None:
+            fig = plot_threshold_curves(thresholds, selected_model_name, recommended_threshold)
+            st.pyplot(fig)
+            plt.close(fig)
 
     st.caption(
         "Ces resultats montrent des associations apprises par le modele. Ils ne prouvent pas une causalite."

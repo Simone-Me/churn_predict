@@ -35,11 +35,10 @@ projet_churn_structure/
   notebooks/
     01_EDA.ipynb
     02_preparation_donnees.ipynb
-    03_modelisation_evaluation.ipynb
-    04_dashboard.ipynb
-    05_feature_engineering_details.ipynb
-    06_entrainement_complet.ipynb
-    07_application_metier.ipynb
+    03_feature_engineering_details.ipynb
+    04_entrainement_complet.ipynb
+    05_modelisation_evaluation.ipynb
+    06_application_metier.ipynb
   reports/
     baseline_analysis.csv
     model_comparison.csv
@@ -50,11 +49,11 @@ projet_churn_structure/
 
 ```powershell
 pip install -r requirements.txt
-jupyter notebook notebooks/06_entrainement_complet.ipynb
+jupyter notebook notebooks/04_entrainement_complet.ipynb
 streamlit run app.py
 ```
 
-Le notebook `06_entrainement_complet.ipynb` regenere les modeles, les rapports et le fichier `data_preprocessed.pkl`.
+Le notebook `04_entrainement_complet.ipynb` regenere les modeles, les rapports et le fichier `data_preprocessed.pkl`.
 
 ## Analyse du desequilibre
 
