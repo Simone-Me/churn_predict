@@ -7,6 +7,7 @@ import streamlit as st
 from sklearn.inspection import permutation_importance
 from sklearn.metrics import (
     accuracy_score,
+    average_precision_score,
     confusion_matrix,
     f1_score,
     precision_score,
@@ -22,7 +23,7 @@ DATA_PATH = BASE_DIR / "data" / "customer_churn.csv"
 PREPROCESSED_PATH = BASE_DIR / "data_preprocessed.pkl"
 MODEL_PATH = BASE_DIR / "models" / "best_model.pkl"
 REPORT_PATH = BASE_DIR / "reports" / "model_comparison.csv"
-DEFAULT_THRESHOLD = 0.35
+DEFAULT_THRESHOLD = 0.50
 
 
 st.set_page_config(page_title="Dashboard Churn Client", layout="wide")
@@ -69,6 +70,7 @@ def model_metrics(model, X_test, y_test, threshold):
         "Recall": recall_score(y_test, y_pred),
         "F1-score": f1_score(y_test, y_pred),
         "ROC-AUC": roc_auc_score(y_test, scores),
+        "PR-AUC": average_precision_score(y_test, scores),
         "Faux negatifs": fn,
         "Faux positifs": fp,
         "Vrais positifs": tp,
@@ -84,14 +86,21 @@ if model is None or info is None or raw_data is None:
     st.error("Artefacts manquants. Lance d'abord le notebook `06_entrainement_complet.ipynb`.")
     st.stop()
 
+recommended_threshold = float(info.get("threshold_recommande", DEFAULT_THRESHOLD))
+selected_model_name = info.get("modele_retenu", "modele retenu")
+selected_strategy = info.get("strategie_retenue", "strategie non renseignee")
+
 threshold = st.sidebar.slider(
     "Seuil d'alerte churn",
-    min_value=0.35,
+    min_value=0.10,
     max_value=0.90,
-    value=DEFAULT_THRESHOLD,
+    value=recommended_threshold,
     step=0.05,
 )
-st.sidebar.caption("Modele retenu : Logistic Regression, choisi pour son recall.")
+st.sidebar.caption(
+    f"Modele retenu : {selected_model_name}. Strategie : {selected_strategy}. "
+    f"Seuil recommande : {recommended_threshold:.2f}."
+)
 
 X_test = info["X_test"]
 y_test = info["y_test"]
@@ -120,11 +129,18 @@ with tab_business:
     kpi3.metric("Clients a risque", f"{len(risky):,}".replace(",", " "))
     kpi4.metric("Revenu mensuel a risque", f"{total_risk_revenue:,.0f} EUR".replace(",", " "))
 
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Recall modele", f"{metrics['Recall']:.1%}")
     m2.metric("Precision", f"{metrics['Precision']:.1%}")
     m3.metric("F1-score", f"{metrics['F1-score']:.3f}")
     m4.metric("ROC-AUC", f"{metrics['ROC-AUC']:.3f}")
+    m5.metric("PR-AUC", f"{metrics['PR-AUC']:.3f}")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Faux negatifs", metrics["Faux negatifs"])
+    c2.metric("Faux positifs", metrics["Faux positifs"])
+    c3.metric("Vrais positifs", metrics["Vrais positifs"])
+    c4.metric("Vrais negatifs", metrics["Vrais negatifs"])
 
     left, right = st.columns([1.3, 1])
     with left:
@@ -248,8 +264,20 @@ with tab_explain:
 
     if comparison is not None:
         st.markdown("#### Rappel du choix du modele")
+        comparison_cols = [
+            "modele",
+            "strategie_desequilibre",
+            "test_recall",
+            "test_precision",
+            "test_f1",
+            "test_roc_auc",
+            "test_pr_auc",
+            "test_fp",
+            "test_fn",
+        ]
+        comparison_cols = [col for col in comparison_cols if col in comparison.columns]
         st.dataframe(
-            comparison[["modele", "test_recall", "test_precision", "test_f1", "test_roc_auc"]]
+            comparison[comparison_cols]
             .sort_values("test_recall", ascending=False)
             .style.format(
                 {
@@ -257,6 +285,7 @@ with tab_explain:
                     "test_precision": "{:.3f}",
                     "test_f1": "{:.3f}",
                     "test_roc_auc": "{:.3f}",
+                    "test_pr_auc": "{:.3f}",
                 }
             ),
             use_container_width=True,

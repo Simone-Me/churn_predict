@@ -4,168 +4,120 @@
 
 Le projet consiste a predire le churn client, c'est-a-dire la probabilite qu'un client resilie son abonnement.
 
-Dans un contexte CRM, ce type de modele sert a :
+Dans un contexte CRM, ce modele sert a identifier les clients a risque, prioriser les actions de retention, reduire la perte de revenu et aider les equipes marketing a prendre une decision.
 
-- identifier les clients a risque ;
-- prioriser les actions de retention ;
-- reduire la perte de revenu ;
-- aider les equipes marketing a prendre une decision.
+## 2. Dataset et desequilibre
 
-## 2. Dataset
+Le dataset contient `10 000` clients. La cible est `churn`.
 
-Le dataset contient 10 000 clients.
+Repartition observee :
 
-Il contient plusieurs familles de variables :
+| Classe | Signification | Effectif | Proportion |
+|---|---|---:|---:|
+| 0 | client qui reste | 8 979 | 89.79 % |
+| 1 | client qui resilie | 1 021 | 10.21 % |
 
-- profil client : age, genre, pays, ville, segment ;
-- contrat : type de contrat, anciennete, frais mensuels ;
-- usage : connexions, jours actifs, temps de session, fonctionnalites utilisees ;
-- paiement : moyen de paiement, echecs de paiement, hausse de prix ;
-- support : tickets, temps de resolution, type de plainte ;
-- satisfaction : CSAT, NPS, reponse au sondage ;
-- cible : `churn`.
+Le ratio majoritaire/minoritaire est donc `8.79`. Ce desequilibre oblige a comparer plusieurs strategies de reequilibrage.
 
-## 3. Pourquoi le recall est prioritaire
+## 3. Pourquoi l'accuracy ne suffit pas
 
-La classe `churn = 1` est minoritaire : environ 10 % des clients.
+Une baseline qui predit toujours `pas de churn` obtient `0.898` d'accuracy, mais `0.000` de recall. Elle ne detecte aucun client perdu.
 
-Dans ce cas, l'accuracy peut etre trompeuse. Un modele qui predit toujours "pas de churn" aurait deja une bonne accuracy, mais il serait inutile.
+Une regression logistique sans reequilibrage au seuil `0.5` obtient `0.896` d'accuracy, mais seulement `0.059` de recall avec `192` faux negatifs.
 
-Le recall est plus adapte parce qu'il repond a la question :
+Dans ce contexte, l'accuracy est trompeuse. Les metriques suivies sont :
 
-> Parmi les clients qui churnent vraiment, combien le modele arrive-t-il a detecter ?
-
-Pour ce projet, manquer un client a risque est considere plus grave que contacter un client qui ne churnera pas.
+- recall : prioritaire, car il mesure la detection des vrais churners ;
+- precision : utile pour controler le nombre d'alertes inutiles ;
+- F1-score : compromis entre precision et recall ;
+- ROC-AUC : capacite generale a classer les clients ;
+- PR-AUC : fortement pertinente car la classe churn est rare.
 
 ## 4. Preparation des donnees
 
 La preparation est faite dans `feature_engineering.py`.
 
-L'idee est de creer des variables simples et metier.
+Variables metier ajoutees :
 
-### Variables ajoutees
+- `has_complaint` ;
+- `payment_risk` ;
+- `low_satisfaction` ;
+- `inactive_customer` ;
+- `monthly_contract` ;
+- `tickets_per_tenure` ;
+- `fee_per_login` ;
+- `support_pressure` ;
+- `engagement_score` ;
+- `satisfaction_score`.
 
-`has_complaint`
+Ces variables representent des signaux CRM lisibles : activite, satisfaction, support, paiement, contrat et revenu.
 
-Indique si le client a deja eu une plainte. Une plainte peut signaler une insatisfaction.
+## 5. Strategies testees
 
-`payment_risk`
+Le notebook `06_entrainement_complet.ipynb` compare plusieurs approches.
 
-Indique s'il y a eu un echec de paiement ou une hausse de prix recente. Ces evenements peuvent augmenter le risque de churn.
+Approches data-level :
 
-`low_satisfaction`
+- `RandomOverSampler` : duplique la classe minoritaire, mais peut favoriser l'overfitting ;
+- `SMOTE` : cree des exemples synthetiques, mais peut ajouter du bruit ;
+- `RandomUnderSampler` : reduit la classe majoritaire, mais peut perdre de l'information.
 
-Indique si le client a un NPS negatif, un CSAT faible ou une reponse insatisfaite.
+Approches model-level :
 
-`inactive_customer`
+- `class_weight="balanced"` pour Logistic Regression ;
+- `class_weight="balanced_subsample"` pour Random Forest ;
+- `scale_pos_weight` pour XGBoost.
 
-Indique si le client utilise peu le service ou ne s'est pas connecte recemment.
+La validation croisee utilise `StratifiedKFold` pour garder la meme proportion de churners dans chaque fold.
 
-`monthly_contract`
+## 6. Resultats principaux
 
-Indique si le client a un contrat mensuel. Un contrat mensuel est souvent plus facile a resilier.
+Au seuil par defaut `0.5`, XGBoost avec `scale_pos_weight` obtient deja le meilleur compromis global :
 
-`tickets_per_tenure`
+| Modele | Strategie | Recall | Precision | F1 | ROC-AUC | PR-AUC |
+|---|---|---:|---:|---:|---:|---:|
+| XGBoost | scale_pos_weight | 0.696 | 0.267 | 0.386 | 0.797 | 0.282 |
+| Logistic Regression | class_weight | 0.672 | 0.197 | 0.305 | 0.750 | 0.251 |
+| Random Forest | class_weight | 0.377 | 0.316 | 0.344 | 0.798 | 0.262 |
 
-Nombre de tickets support rapporte a l'anciennete du client.
+## 7. Ajustement du seuil
 
-`fee_per_login`
+Le seuil `0.5` n'est pas optimal avec une classe positive rare. Le notebook teste des seuils de `0.10` a `0.90`.
 
-Frais mensuels rapportes au nombre de connexions. Cela donne une idee du cout percu par rapport a l'utilisation.
+Le seuil final choisi est `0.20` pour XGBoost avec `scale_pos_weight`.
 
-`support_pressure`
+| Seuil | Recall | Precision | F1 | Faux positifs | Faux negatifs | Vrais positifs |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0.20 | 0.882 | 0.211 | 0.340 | 674 | 24 | 180 |
 
-Combine le nombre de tickets et le temps de resolution. Cela represente la pression support.
+Ce seuil reduit fortement les faux negatifs. Le prix a payer est un volume plus eleve de faux positifs, acceptable si les actions de retention restent peu couteuses.
 
-`engagement_score`
+## 8. Choix final
 
-Score simple qui resume l'activite client : connexions, jours actifs, fonctionnalites utilisees, croissance d'usage et recence.
-
-`satisfaction_score`
-
-Score simple qui resume la satisfaction : CSAT, NPS, escalades et plaintes.
-
-## 5. Modeles
-
-Quatre modeles sont entraines dans le notebook `06_entrainement_complet.ipynb`.
-
-### Logistic Regression
-
-Modele simple et interpretable. Il sert de baseline solide.
-
-Dans ce projet, il donne le meilleur recall.
-
-### Random Forest
-
-Modele d'arbres qui capture des relations non lineaires.
-
-Il donne un bon F1-score et une meilleure precision que la regression logistique.
-
-### XGBoost
-
-Modele de gradient boosting performant sur donnees tabulaires.
-
-Il donne un bon compromis entre recall, precision et ROC-AUC.
-
-### MLP
-
-Modele de reseau de neurones simple.
-
-Il est inclus pour respecter l'exigence d'un modele Deep Learning.
-
-## 6. Resultats
-
-Le seuil de decision est garde a `0.35`.
-
-| Modele | Recall | Precision | F1 | ROC-AUC |
-|---|---:|---:|---:|---:|
-| Logistic Regression | 0.882 | 0.165 | 0.278 | 0.750 |
-| XGBoost | 0.843 | 0.215 | 0.343 | 0.784 |
-| Random Forest | 0.809 | 0.259 | 0.392 | 0.798 |
-| Deep Learning MLP | 0.353 | 0.257 | 0.298 | 0.699 |
-
-## 7. Choix final
-
-Le modele retenu est la Logistic Regression.
+Le modele retenu est **XGBoost avec `scale_pos_weight`**, seuil `0.20`.
 
 Raisons :
 
-- meilleur recall ;
-- modele simple a expliquer ;
-- bon choix quand l'objectif est de detecter un maximum de clients a risque ;
-- plus transparent qu'un modele complexe.
+- meilleur compromis recall/precision sous contrainte metier ;
+- tres bonne detection des churners : `180` sur `204` dans le test set ;
+- PR-AUC et ROC-AUC solides pour un dataset desequilibre ;
+- conservation de toutes les donnees, contrairement a l'under-sampling.
 
-Limite :
+## 9. Dashboard
 
-- la precision est faible ;
-- cela veut dire que certains clients alertes ne churneront pas vraiment.
+Le dashboard Streamlit utilise `best_model.pkl` et le seuil recommande stocke dans `data_preprocessed.pkl`.
 
-Cette limite est acceptable si le cout d'une action de retention est plus faible que le cout d'un client perdu.
-
-## 8. Dashboard
-
-Le dashboard Streamlit permet de :
+Il permet de :
 
 - afficher les KPI principaux ;
 - voir les clients a risque ;
 - estimer le revenu mensuel a risque ;
 - simuler un client ;
-- comparer les modeles ;
-- afficher les variables importantes.
+- comparer les strategies ;
+- afficher le recall, la precision, le F1-score, la ROC-AUC, la PR-AUC et les faux positifs/faux negatifs.
 
 Commande :
 
 ```powershell
 streamlit run app.py
 ```
-
-## 9. Ce qu'il faut retenir pour la presentation
-
-La logique du projet est :
-
-1. Comprendre le desequilibre du churn.
-2. Choisir le recall comme metrique principale.
-3. Creer des variables metier simples.
-4. Comparer quatre modeles.
-5. Retenir le modele avec le meilleur recall.
-6. Mettre le resultat dans un dashboard utilisable.

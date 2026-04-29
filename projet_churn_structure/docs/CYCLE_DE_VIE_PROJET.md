@@ -1,256 +1,132 @@
 # Cycle de vie du projet
 
-Ce document explique le projet comme une histoire logique, de l'idee de depart jusqu'au dashboard final.
+## 1. Probleme metier
 
-## 1. Comprendre le probleme metier
-
-Au depart, la consigne demandait de construire une solution autour de la retention client.
-
-Le probleme metier est simple :
-
-- une entreprise veut savoir quels clients risquent de partir ;
-- elle veut agir avant que le client resilie ;
-- elle veut prioriser les actions de retention ;
-- elle veut limiter la perte de chiffre d'affaires.
-
-Nous avons donc choisi la tache la plus naturelle du dataset :
-
-> Predire le churn client, c'est-a-dire savoir si un client risque de resilier son abonnement.
+Le but est d'aider une equipe CRM a identifier les clients qui risquent de resilier leur abonnement, afin d'agir avant le depart.
 
 La variable cible est `churn` :
 
 - `0` : le client reste ;
 - `1` : le client part.
 
-## 2. Explorer les donnees
+## 2. Exploration des donnees
 
-La premiere etape a ete l'EDA, c'est-a-dire l'analyse exploratoire.
+L'EDA montre un desequilibre important :
 
-Nous avons regarde :
+- `8 979` clients restent ;
+- `1 021` clients churnent ;
+- le ratio majoritaire/minoritaire est `8.79`.
 
-- la taille du dataset ;
-- les colonnes disponibles ;
-- les valeurs manquantes ;
-- la repartition de la cible `churn` ;
-- les liens possibles entre churn et contrat, support, paiement, satisfaction, activite.
+Environ `10.21 %` des clients churnent. Cette proportion change la maniere d'evaluer les modeles.
 
-Le premier constat important a ete le desequilibre de la cible :
+## 3. Accuracy insuffisante
 
-> Il y a beaucoup plus de clients qui restent que de clients qui partent.
+Avec ce dataset, une baseline qui predit toujours la classe majoritaire obtient `0.898` d'accuracy, mais `0.000` de recall.
 
-Environ 10 % des clients churnent. Cela change completement la maniere d'evaluer les modeles.
+Cela veut dire qu'elle ne detecte aucun churner. Pour le metier, ce modele est inutile.
 
-## 3. Comprendre que l'accuracy ne suffit pas
+Le projet suit donc surtout :
 
-Au debut, on pourrait penser qu'un modele avec une bonne accuracy est un bon modele.
+- le recall, pour minimiser les faux negatifs ;
+- la precision, pour surveiller les alertes inutiles ;
+- le F1-score, pour mesurer le compromis ;
+- la ROC-AUC et la PR-AUC, pour evaluer la qualite du scoring.
 
-Mais avec un dataset desequilibre, ce n'est pas suffisant.
+La PR-AUC est particulierement utile parce que la classe positive est rare.
 
-Exemple :
+## 4. Preparation et feature engineering
 
-Si 90 % des clients restent, un modele qui predit toujours "le client reste" peut avoir environ 90 % d'accuracy, mais il ne detecte aucun client qui part.
+Les donnees sont preparees dans `feature_engineering.py`.
 
-Pour notre sujet, ce n'est pas utile.
+Nous creons des variables metier faciles a expliquer :
 
-Nous avons donc choisi de regarder surtout le **recall**.
+- plainte client ;
+- risque paiement ;
+- faible satisfaction ;
+- inactivite ;
+- contrat mensuel ;
+- pression support ;
+- engagement ;
+- satisfaction globale.
 
-Le recall repond a la question :
+Ces variables traduisent des signaux concrets que les equipes CRM peuvent comprendre.
 
-> Parmi les clients qui partent vraiment, combien le modele arrive-t-il a detecter ?
+## 5. Validation stratifiee
 
-Comme le but est de ne pas rater les clients a risque, le recall est la metrique la plus importante pour nous.
+Le split train/test est stratifie, et la validation croisee utilise `StratifiedKFold`.
 
-## 4. Nettoyer et preparer les donnees
+Ce choix preserve les proportions de classes dans chaque fold. C'est important car, sans stratification, certains folds pourraient contenir trop peu de churners et rendre le recall instable.
 
-Ensuite, nous avons prepare les donnees pour les modeles.
+## 6. Gestion du desequilibre
 
-Nous avons :
+Plusieurs techniques sont testees.
 
-- remplace les valeurs manquantes de `complaint_type` par "Aucune Plainte" ;
-- retire `customer_id`, car c'est juste un identifiant ;
-- separe les variables explicatives `X` et la cible `y` ;
-- fait un split train/test stratifie pour garder la meme proportion de churners dans train et test ;
-- encode les variables categorielles ;
-- standardise les variables numeriques pour les modeles qui en ont besoin.
+Data-level :
 
-Le split stratifie est important car il evite d'avoir un jeu d'entrainement ou de test avec une proportion de churn trop differente.
+- `RandomOverSampler` ;
+- `SMOTE` ;
+- `RandomUnderSampler`.
 
-## 5. Faire du feature engineering
+Model-level :
 
-Nous nous sommes rendu compte que les variables brutes ne suffisaient pas toujours.
-
-Par exemple, une plainte seule ne raconte pas toute l'histoire. Il est plus parlant de savoir :
-
-- si le client a deja eu une plainte ;
-- s'il est peu actif ;
-- s'il a eu des problemes de paiement ;
-- s'il a une faible satisfaction ;
-- s'il utilise peu le service par rapport a ce qu'il paie.
-
-Nous avons donc cree des variables metier simples dans `feature_engineering.py` :
-
-- `has_complaint` ;
-- `payment_risk` ;
-- `low_satisfaction` ;
-- `inactive_customer` ;
-- `monthly_contract` ;
-- `tickets_per_tenure` ;
-- `fee_per_login` ;
-- `support_pressure` ;
-- `engagement_score` ;
-- `satisfaction_score`.
-
-Ces variables sont faciles a expliquer car elles correspondent a une logique CRM.
-
-## 6. Choisir plusieurs modeles
-
-La consigne demandait de comparer plusieurs modeles, dont un modele de Deep Learning.
-
-Nous avons choisi quatre modeles :
-
-### Logistic Regression
-
-Modele simple, interpretable et utile comme baseline.
-
-Il est interessant car on peut expliquer facilement pourquoi il sert de reference.
-
-### Random Forest
-
-Modele base sur plusieurs arbres de decision.
-
-Il est robuste, fonctionne bien avec des donnees tabulaires et gere naturellement des relations non lineaires.
-
-### XGBoost
-
-Modele de boosting performant sur les donnees tabulaires.
-
-Il corrige progressivement ses erreurs et donne souvent de bons resultats.
-
-### MLP
-
-Petit reseau de neurones.
-
-Il permet de respecter la demande d'inclure un modele Deep Learning, meme si ce n'est pas forcement le meilleur choix pour ce dataset.
-
-## 7. Adapter le preprocessing aux modeles
-
-Nous avons aussi compris que tous les modeles n'ont pas les memes besoins.
-
-Pour Logistic Regression et MLP :
-
-- les variables numeriques doivent etre standardisees ;
-- ces modeles sont sensibles aux echelles des variables.
-
-Pour Random Forest et XGBoost :
-
-- la standardisation n'est pas indispensable ;
-- les arbres fonctionnent avec des seuils et sont moins sensibles aux echelles.
-
-C'est pour cela que les pipelines ne sont pas exactement identiques selon les modeles.
-
-## 8. Gerer le desequilibre
-
-Comme les churners sont minoritaires, il fallait eviter que les modeles apprennent surtout la classe majoritaire.
-
-Nous avons utilise une ponderation de classe pour certains modeles :
-
-- `class_weight='balanced'` pour Logistic Regression ;
-- `class_weight='balanced_subsample'` pour Random Forest ;
+- `class_weight="balanced"` ;
+- `class_weight="balanced_subsample"` ;
 - `scale_pos_weight` pour XGBoost.
 
-L'idee est de dire au modele :
+Les effets attendus sont differents : l'over-sampling peut overfitter, SMOTE peut ajouter du bruit, l'under-sampling peut perdre de l'information, et la ponderation garde toutes les observations.
 
-> Les erreurs sur les clients qui churnent coutent plus cher, donc il faut leur donner plus d'importance pendant l'entrainement.
+## 7. Entrainement et comparaison
 
-Nous avons prefere cette approche car elle reste simple a expliquer.
+Le notebook `06_entrainement_complet.ipynb` entraine les experiences et regenere :
 
-## 9. Evaluer les modeles
+- `reports/baseline_analysis.csv` ;
+- `reports/model_comparison.csv` ;
+- `reports/threshold_analysis.csv` ;
+- les modeles dans `models/` ;
+- `data_preprocessed.pkl`.
 
-Nous avons compare les modeles avec plusieurs metriques :
+Au seuil `0.5`, XGBoost avec `scale_pos_weight` donne un bon compromis :
 
-- accuracy ;
-- precision ;
-- recall ;
-- F1-score ;
-- ROC-AUC.
+- recall : `0.696` ;
+- precision : `0.267` ;
+- F1-score : `0.386` ;
+- ROC-AUC : `0.797` ;
+- PR-AUC : `0.282`.
 
-Mais pour choisir le modele final, nous avons surtout regarde le recall.
+## 8. Optimisation du seuil
 
-Resultats principaux au seuil fixe 0.35 :
+Le seuil de classification par defaut est `0.5`. Dans un probleme desequilibre, il n'est pas forcement optimal.
 
-| Modele | Recall | Precision | F1 | ROC-AUC |
-|---|---:|---:|---:|---:|
-| Logistic Regression | 0.882 | 0.165 | 0.278 | 0.750 |
-| XGBoost | 0.843 | 0.215 | 0.343 | 0.784 |
-| Random Forest | 0.809 | 0.259 | 0.392 | 0.798 |
-| MLP | 0.353 | 0.257 | 0.298 | 0.699 |
+Le projet teste des seuils de `0.10` a `0.90`.
 
-Le meilleur recall est obtenu par la Logistic Regression.
+Le seuil retenu est `0.20` pour XGBoost avec `scale_pos_weight` :
 
-## 10. Choisir le modele final
+- recall : `0.882` ;
+- precision : `0.211` ;
+- F1-score : `0.340` ;
+- faux positifs : `674` ;
+- faux negatifs : `24` ;
+- vrais positifs : `180`.
 
-Nous avons retenu la Logistic Regression.
+Le seuil plus bas detecte beaucoup plus de churners, au prix d'un nombre plus eleve de clients alertes.
 
-Pourquoi ?
+## 9. Choix final
 
-- elle a le meilleur recall ;
-- elle est simple a expliquer ;
-- elle correspond bien a l'objectif metier : detecter le plus possible de clients a risque ;
-- elle sert de modele clair pour une presentation.
+Le modele final est **XGBoost avec `scale_pos_weight` au seuil `0.20`**.
 
-La limite est sa precision faible.
+Ce choix est pertinent en contexte metier car il detecte la majorite des clients qui vont partir. Le compromis precision/recall est acceptable si le cout d'un contact de retention est inferieur au cout d'un client perdu.
 
-Cela veut dire que certains clients alertes ne partiront pas vraiment.
+## 10. Dashboard
 
-Mais dans un contexte de retention, ce compromis peut etre acceptable :
+Le dashboard Streamlit transforme le modele en outil decisionnel :
 
-> Il vaut mieux contacter quelques clients en trop que rater beaucoup de clients qui allaient partir.
+- KPI metier ;
+- clients a prioriser ;
+- revenu mensuel a risque ;
+- simulation client ;
+- comparaison des strategies ;
+- affichage des erreurs FP/FN.
 
-## 11. Construire le dashboard
+## 11. Conclusion
 
-La derniere etape a ete de transformer le travail de modelisation en outil utilisable.
-
-Le dashboard Streamlit permet de :
-
-- voir les indicateurs principaux ;
-- estimer le nombre de clients a risque ;
-- calculer un revenu mensuel a risque ;
-- simuler un profil client ;
-- comparer les modeles ;
-- afficher les variables influentes.
-
-L'objectif n'est pas seulement d'avoir un modele, mais d'avoir une aide a la decision.
-
-## 12. Ce qu'on a appris en avançant
-
-Au debut, le projet semblait etre seulement un probleme de prediction.
-
-En avançant, nous avons compris que les points importants etaient :
-
-- comprendre le desequilibre de la cible ;
-- choisir une metrique adaptee ;
-- preparer les donnees selon les modeles ;
-- creer des variables metier utiles ;
-- comparer plusieurs modeles ;
-- expliquer les resultats simplement ;
-- transformer le modele en outil decisionnel.
-
-## 13. Limites et ameliorations possibles
-
-Le projet peut encore etre ameliore.
-
-Pistes possibles :
-
-- analyser plus precisement les faux negatifs ;
-- tester d'autres variables metier ;
-- optimiser les hyperparametres ;
-- tester RobustScaler pour les modeles sensibles aux outliers ;
-- ajouter SHAP pour expliquer les predictions plus finement.
-
-## 14. Phrase de conclusion
-
-Nous avons construit un cycle complet de projet Data Science :
-
-> comprehension du probleme, exploration des donnees, preparation, feature engineering, entrainement, evaluation, choix du modele et dashboard.
-
-Le projet montre que la meilleure solution n'est pas seulement celle qui a la meilleure accuracy, mais celle qui repond le mieux au besoin metier : detecter les clients a risque pour agir avant leur depart.
+Le projet montre qu'un bon modele de churn ne se choisit pas seulement avec l'accuracy. Il faut adapter les metriques, traiter le desequilibre, utiliser une validation stratifiee et ajuster le seuil en fonction du besoin metier.

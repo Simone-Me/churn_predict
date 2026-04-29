@@ -1,6 +1,6 @@
 # Projet de prediction du churn client
 
-Ce projet repond a la consigne EFREI : predire le churn client, comparer plusieurs modeles et proposer un dashboard decisionnel.
+Ce projet repond a la consigne EFREI : predire le churn client, traiter le desequilibre de classes, comparer plusieurs strategies de modelisation et proposer un dashboard decisionnel.
 
 ## Objectif
 
@@ -11,16 +11,15 @@ La cible est `churn` :
 - `0` : le client reste ;
 - `1` : le client resilie.
 
-Comme les churners sont minoritaires, la metrique prioritaire est le **recall**.
+La cible est desequilibree : le dataset contient `8 979` non-churners et `1 021` churners, soit un ratio majoritaire/minoritaire de `8.79`. Le **recall** est donc prioritaire, car rater un churner est plus couteux que contacter un client en trop.
 
 ## Structure
 
 ```text
-churn_predict/
+projet_churn_structure/
   app.py
   feature_engineering.py
   README.md
-  ETAT_DES_LIEUX.md
   requirements.txt
   data/
     customer_churn.csv
@@ -29,14 +28,10 @@ churn_predict/
     DOCUMENTATION_PROJET.md
     CYCLE_DE_VIE_PROJET.md
     TEXTE_A_DIRE.md
-    SLIDE_NOTES.txt
     presentation_churn_notes.pptx
   models/
     best_model.pkl
-    model_LogisticRegression.pkl
-    model_RandomForest.pkl
-    model_XGBoost.pkl
-    model_DeepLearning.pkl
+    model_*.pkl
   notebooks/
     01_EDA.ipynb
     02_preparation_donnees.ipynb
@@ -46,6 +41,7 @@ churn_predict/
     06_entrainement_complet.ipynb
     07_application_metier.ipynb
   reports/
+    baseline_analysis.csv
     model_comparison.csv
     threshold_analysis.csv
 ```
@@ -58,59 +54,51 @@ jupyter notebook notebooks/06_entrainement_complet.ipynb
 streamlit run app.py
 ```
 
-Le dashboard s'ouvre generalement sur :
-
-```text
-http://localhost:8501
-```
-
-## Notebooks
-
-Les notebooks sont prevus pour etre executes et compris par vous deux :
-
-- `01_EDA.ipynb` : analyse exploratoire ;
-- `02_preparation_donnees.ipynb` : preparation des donnees ;
-- `03_modelisation_evaluation.ipynb` : comparaison des modeles ;
-- `04_dashboard.ipynb` : utilisation du dashboard ;
-- `05_feature_engineering_details.ipynb` : detail des variables metier ;
-- `06_entrainement_complet.ipynb` : execution du pipeline final ;
-- `07_application_metier.ipynb` : explication de l'application finale.
-
 Le notebook `06_entrainement_complet.ipynb` regenere les modeles, les rapports et le fichier `data_preprocessed.pkl`.
 
-Les fichiers `.py` restants sont seulement ceux necessaires au dashboard ou aux fonctions partagees.
+## Analyse du desequilibre
 
-## Choix du modele
+Une baseline majoritaire obtient `0.898` d'accuracy, mais `0.000` de recall : elle ne detecte aucun churner. Une regression logistique sans reequilibrage au seuil `0.5` obtient aussi une accuracy elevee (`0.896`), mais seulement `0.059` de recall.
 
-Le projet compare 4 modeles :
+C'est pour cela que le projet utilise des metriques adaptees :
 
-- Logistic Regression ;
-- Random Forest ;
-- XGBoost ;
-- Deep Learning MLP.
+- recall : detecter les clients qui vont vraiment churner ;
+- precision : eviter trop d'alertes inutiles ;
+- F1-score : compromis precision/recall ;
+- ROC-AUC : qualite globale du classement ;
+- PR-AUC : metrique fortement utile quand la classe positive est rare.
 
-Le modele retenu est la **Logistic Regression**, car elle obtient le meilleur recall au seuil fixe `0.35`.
+## Strategies comparees
 
-Dans le dashboard final, l'utilisateur metier ne choisit pas le modele. L'application utilise directement le modele retenu, car le but est d'aider a prioriser les clients, pas de comparer les algorithmes.
+Le notebook final compare :
 
-## Resultat principal
+- baseline sans reequilibrage ;
+- `RandomOverSampler` ;
+- `SMOTE` ;
+- `RandomUnderSampler` ;
+- `class_weight="balanced"` pour Logistic Regression ;
+- `class_weight="balanced_subsample"` pour Random Forest ;
+- `scale_pos_weight` pour XGBoost ;
+- MLP avec SMOTE.
 
-| Modele | Recall | Precision | F1 | ROC-AUC |
-|---|---:|---:|---:|---:|
-| Logistic Regression | 0.882 | 0.165 | 0.278 | 0.750 |
-| XGBoost | 0.843 | 0.215 | 0.343 | 0.784 |
-| Random Forest | 0.809 | 0.259 | 0.392 | 0.798 |
-| Deep Learning MLP | 0.353 | 0.257 | 0.298 | 0.699 |
+Toutes les validations croisees utilisent `StratifiedKFold`, afin de preserver la proportion de churners dans chaque fold.
+
+## Resultat final
+
+Le modele retenu est **XGBoost avec `scale_pos_weight`**, au seuil recommande `0.20`.
+
+| Modele final | Strategie | Seuil | Recall | Precision | F1 | ROC-AUC | PR-AUC | FP | FN |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| XGBoost | scale_pos_weight | 0.20 | 0.882 | 0.211 | 0.340 | 0.797 | 0.282 | 674 | 24 |
+
+Ce choix detecte `180` churners sur `204` dans le test set. Le compromis accepte plus de faux positifs pour reduire les faux negatifs, ce qui est coherent avec un contexte CRM ou une action de retention coute moins cher qu'un client perdu.
 
 ## Idee principale
 
-Le gain vient surtout de la preparation des donnees :
+Le gain vient de la combinaison suivante :
 
-- activite client ;
-- satisfaction ;
-- pression support ;
-- risque paiement ;
-- type de contrat ;
-- anciennete et revenu.
-
-Ces variables sont simples a expliquer et correspondent a une logique metier CRM.
+- variables metier explicables ;
+- validation stratifiee ;
+- comparaison explicite des techniques de desequilibre ;
+- choix de metriques adaptees ;
+- ajustement du seuil de decision.
