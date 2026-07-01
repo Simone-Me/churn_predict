@@ -14,18 +14,9 @@ def prepare_customer_features(df: pd.DataFrame) -> pd.DataFrame:
     data["payment_risk"] = (
         (data["payment_failures"] > 0) | (data["price_increase_last_3m"] == "Yes")
     ).astype(int)
-    data["low_satisfaction"] = (
-        (data["nps_score"] < 0)
-        | (data["csat_score"] <= 2)
-        | (data["survey_response"] == "Unsatisfied")
-    ).astype(int)
-    data["inactive_customer"] = (
-        (data["monthly_logins"] <= 5) | (data["last_login_days_ago"] >= 20)
-    ).astype(int)
     data["monthly_contract"] = (data["contract_type"] == "Monthly").astype(int)
 
     data["tickets_per_tenure"] = data["support_tickets"] / tenure_safe
-    data["revenue_per_month"] = data["total_revenue"] / tenure_safe
     data["fee_per_login"] = data["monthly_fee"] / logins_safe
     data["support_pressure"] = data["support_tickets"] * data["avg_resolution_time"]
     data["engagement_score"] = (
