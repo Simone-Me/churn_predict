@@ -25,7 +25,7 @@ La cible est desequilibree : le dataset contient `8 979` non-churners et `1 021`
 ## 3. Structure du depot
 
 ```text
-projet_churn_structure/
+churn_predict/
   app.py                        # Dashboard Streamlit (utilisateur metier)
   feature_engineering.py        # Fonction prepare_customer_features() : variables metier
   requirements.txt

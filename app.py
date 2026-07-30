@@ -339,6 +339,35 @@ def plot_permutation_importance(top_series):
     return fig
 
 
+ENGINEERED_FEATURES = [
+    "has_complaint",
+    "payment_risk",
+    "monthly_contract",
+    "tickets_per_tenure",
+    "fee_per_login",
+    "support_pressure",
+    "engagement_score",
+    "satisfaction_score",
+]
+
+
+def plot_engineered_features_importance(importances):
+    """Permutation importance restreinte aux variables creees en feature engineering,
+    pour montrer leur apport par rapport aux variables brutes."""
+    engineered = importances.reindex(ENGINEERED_FEATURES).dropna().sort_values()
+    if engineered.empty:
+        return None
+
+    fig, ax = plt.subplots(figsize=GRID_FIGSIZE)
+    engineered.rename(index=format_feature_name).plot(kind="barh", ax=ax, color="#2563eb")
+    ax.axvline(0, color="black", linewidth=0.8)
+    style_grid_axes(
+        ax, "Apport des variables creees (feature engineering)", xlabel="Perte de recall"
+    )
+    fig.tight_layout()
+    return fig
+
+
 def plot_shap_importance(model, X_sample, top_n=10):
     """SHAP sur le modele final selectionne, pour une explication plus avancee."""
     if shap is None:
@@ -731,12 +760,8 @@ with tab_explain:
         n_repeats=5,
         random_state=42,
     )
-    permutation_top = (
-        pd.Series(result.importances_mean, index=X_test.columns)
-        .sort_values(ascending=False)
-        .head(10)
-        .sort_values()
-    )
+    permutation_scores = pd.Series(result.importances_mean, index=X_test.columns)
+    permutation_top = permutation_scores.sort_values(ascending=False).head(10).sort_values()
 
     importance_figs = []
     native_fig = plot_native_feature_importance(model, X_test.iloc[:sample_size])
@@ -750,6 +775,18 @@ with tab_explain:
         st.info("SHAP n'est pas disponible pour cet environnement ou ce modele.")
 
     render_chart_grid(importance_figs, n_cols=3)
+
+    st.markdown("#### Apport des variables creees en feature engineering")
+    st.write(
+        "Les graphiques ci-dessus ne montrent que le top 10 des variables, ou les variables "
+        "creees (engagement_score, satisfaction_score, etc.) n'apparaissent pas toujours. "
+        "Ce graphique isole leur permutation importance pour verifier leur utilite reelle."
+    )
+    engineered_fig = plot_engineered_features_importance(permutation_scores)
+    if engineered_fig is not None:
+        render_chart_grid([engineered_fig], n_cols=3)
+    else:
+        st.info("Aucune des variables creees n'est presente dans les colonnes du modele.")
 
     if comparison is not None:
         st.markdown("#### Rappel du choix du modele")
